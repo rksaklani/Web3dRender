@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken'
-import pool from '../config/database.js'
+import { getDB } from '../config/database.js'
+import { ObjectId } from 'mongodb'
 
 export const authenticate = async (req, res, next) => {
   try {
@@ -12,15 +13,23 @@ export const authenticate = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET)
     
     // Get user from database
-    const result = await pool.query('SELECT id, email, name FROM users WHERE id = $1', [
-      decoded.userId,
-    ])
+    const db = await getDB()
+    const user = await db.collection('users').findOne(
+      { _id: new ObjectId(decoded.userId) },
+      { projection: { password: 0 } } // Exclude password
+    )
 
-    if (result.rows.length === 0) {
+    if (!user) {
       return res.status(401).json({ message: 'User not found' })
     }
 
-    req.user = result.rows[0]
+    // Convert _id to id for consistency
+    req.user = {
+      id: user._id.toString(),
+      email: user.email,
+      name: user.name
+    }
+    
     next()
   } catch (error) {
     if (error.name === 'JsonWebTokenError') {

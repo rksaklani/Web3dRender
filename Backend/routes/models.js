@@ -12,7 +12,8 @@ import { videoProcessor } from '../services/videoProcessor.js'
 import { ALLOWED_EXTENSIONS, MAX_FILE_SIZE, FILE_CATEGORIES } from '../constants/fileTypes.js'
 import { asyncHandler, createError } from '../utils/errorHandler.js'
 import { validateFileContent, sanitizeFilename } from '../utils/fileValidator.js'
-import pool from '../config/database.js' // Needed for project verification
+import { getDB } from '../config/database.js'
+import { ObjectId } from 'mongodb'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -106,11 +107,12 @@ router.post('/upload', upload.single('model'), asyncHandler(async (req, res) => 
   }
 
   // Verify project belongs to user
-  const projectCheck = await pool.query(
-    'SELECT id FROM projects WHERE id = $1 AND user_id = $2',
-    [project_id, req.user.id]
-  )
-  if (projectCheck.rows.length === 0) {
+  const db = await getDB()
+  const projectCheck = await db.collection('projects').findOne({
+    _id: new ObjectId(project_id),
+    user_id: new ObjectId(req.user.id)
+  })
+  if (!projectCheck) {
     // Delete uploaded file if project validation fails
     try {
       await fs.unlink(req.file.path)

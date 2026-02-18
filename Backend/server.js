@@ -22,6 +22,13 @@ import volumetricVideoRoutes from './routes/volumetricVideo.js'
 // Load environment variables
 dotenv.config()
 
+// Validate required environment variables
+if (!process.env.JWT_SECRET) {
+  console.error('❌ ERROR: JWT_SECRET is not set in .env file!')
+  console.error('Please create a .env file with JWT_SECRET defined.')
+  process.exit(1)
+}
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 

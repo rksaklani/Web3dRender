@@ -1,5 +1,5 @@
-import pool from '../config/database.js'
-import { getCache, setCache, clearCache } from '../utils/queryCache.js'
+import { getDB } from '../config/database.js'
+import { ObjectId } from 'mongodb'
 
 /**
  * Photogrammetry Service - Handles photogrammetry projects and camera calibration
@@ -8,8 +8,8 @@ import { getCache, setCache, clearCache } from '../utils/queryCache.js'
 export const photogrammetryService = {
   /**
    * Create a photogrammetry project
-   * @param {number} modelId - Model ID
-   * @param {number} userId - User ID
+   * @param {string} modelId - Model ID (ObjectId string)
+   * @param {string} userId - User ID (ObjectId string)
    * @param {Object} settings - Project settings
    * @returns {Promise<Object>} Created project
    */
@@ -21,95 +21,163 @@ export const photogrammetryService = {
       input_images_count
     } = settings
     
-    // Verify model ownership
-    const modelCheck = await pool.query(
-      'SELECT id FROM models WHERE id = $1 AND user_id = $2',
-      [modelId, userId]
-    )
+    const db = await getDB()
     
-    if (modelCheck.rows.length === 0) {
+    // Verify model ownership
+    const modelCheck = await db.collection('models').findOne({
+      _id: new ObjectId(modelId),
+      user_id: new ObjectId(userId)
+    })
+    
+    if (!modelCheck) {
       throw new Error('Model not found or access denied')
     }
     
-    const result = await pool.query(
-      `INSERT INTO photogrammetry_projects 
-       (model_id, project_id, user_id, reconstruction_method, quality_settings, 
-        input_images_count, processing_status)
-       VALUES ($1, $2, $3, $4, $5, $6, 'pending')
-       RETURNING *`,
-      [
-        modelId,
-        project_id || null,
-        userId,
-        reconstruction_method || 'SfM',
-        quality_settings ? JSON.stringify(quality_settings) : null,
-        input_images_count || 0
-      ]
-    )
+    const now = new Date()
+    const project = {
+      model_id: new ObjectId(modelId),
+      project_id: project_id ? new ObjectId(project_id) : null,
+      user_id: new ObjectId(userId),
+      reconstruction_method: reconstruction_method || 'SfM',
+      quality_settings: quality_settings || null,
+      input_images_count: input_images_count || 0,
+      processing_status: 'pending',
+      created_at: now,
+      updated_at: now
+    }
     
-    return result.rows[0]
+    const result = await db.collection('photogrammetry_projects').insertOne(project)
+    
+    return {
+      id: result.insertedId.toString(),
+      ...project,
+      model_id: project.model_id.toString(),
+      project_id: project.project_id ? project.project_id.toString() : null,
+      user_id: project.user_id.toString()
+    }
   },
 
   /**
    * Get photogrammetry project by ID
-   * @param {number} projectId - Project ID
-   * @param {number} userId - User ID (for authorization)
+   * @param {string} projectId - Project ID (ObjectId string)
+   * @param {string} userId - User ID (ObjectId string)
    * @returns {Promise<Object|null>} Project or null
    */
   async getProjectById(projectId, userId) {
-    const result = await pool.query(
-      `SELECT pp.*, m.name as model_name, m.file_path as model_path
-       FROM photogrammetry_projects pp
-       JOIN models m ON pp.model_id = m.id
-       WHERE pp.id = $1 AND pp.user_id = $2`,
-      [projectId, userId]
-    )
+    const db = await getDB()
+    const project = await db.collection('photogrammetry_projects')
+      .aggregate([
+        {
+          $match: {
+            _id: new ObjectId(projectId),
+            user_id: new ObjectId(userId)
+          }
+        },
+        {
+          $lookup: {
+            from: 'models',
+            localField: 'model_id',
+            foreignField: '_id',
+            as: 'model'
+          }
+        },
+        {
+          $unwind: {
+            path: '$model',
+            preserveNullAndEmptyArrays: true
+          }
+        },
+        {
+          $project: {
+            _id: 1,
+            model_id: 1,
+            project_id: 1,
+            user_id: 1,
+            reconstruction_method: 1,
+            quality_settings: 1,
+            input_images_count: 1,
+            processing_status: 1,
+            output_mesh_path: 1,
+            processing_log: 1,
+            created_at: 1,
+            updated_at: 1,
+            model_name: '$model.name',
+            model_path: '$model.file_path'
+          }
+        }
+      ])
+      .toArray()
     
-    if (result.rows.length === 0) {
+    if (project.length === 0) {
       return null
     }
     
-    const row = result.rows[0]
+    const p = project[0]
     return {
-      ...row,
-      quality_settings: row.quality_settings ? JSON.parse(row.quality_settings) : null
+      id: p._id.toString(),
+      model_id: p.model_id.toString(),
+      project_id: p.project_id ? p.project_id.toString() : null,
+      user_id: p.user_id.toString(),
+      reconstruction_method: p.reconstruction_method,
+      quality_settings: p.quality_settings,
+      input_images_count: p.input_images_count,
+      processing_status: p.processing_status,
+      output_mesh_path: p.output_mesh_path,
+      processing_log: p.processing_log,
+      model_name: p.model_name,
+      model_path: p.model_path,
+      created_at: p.created_at,
+      updated_at: p.updated_at
     }
   },
 
   /**
    * Get all photogrammetry projects for a model
-   * @param {number} modelId - Model ID
-   * @param {number} userId - User ID (for authorization)
+   * @param {string} modelId - Model ID (ObjectId string)
+   * @param {string} userId - User ID (ObjectId string)
    * @returns {Promise<Array>} Array of projects
    */
   async getProjectsByModelId(modelId, userId) {
-    // Verify model ownership
-    const modelCheck = await pool.query(
-      'SELECT id FROM models WHERE id = $1 AND user_id = $2',
-      [modelId, userId]
-    )
+    const db = await getDB()
     
-    if (modelCheck.rows.length === 0) {
+    // Verify model ownership
+    const modelCheck = await db.collection('models').findOne({
+      _id: new ObjectId(modelId),
+      user_id: new ObjectId(userId)
+    })
+    
+    if (!modelCheck) {
       return []
     }
     
-    const result = await pool.query(
-      `SELECT * FROM photogrammetry_projects 
-       WHERE model_id = $1 AND user_id = $2
-       ORDER BY created_at DESC`,
-      [modelId, userId]
-    )
+    const projects = await db.collection('photogrammetry_projects')
+      .find({
+        model_id: new ObjectId(modelId),
+        user_id: new ObjectId(userId)
+      })
+      .sort({ created_at: -1 })
+      .toArray()
     
-    return result.rows.map(row => ({
-      ...row,
-      quality_settings: row.quality_settings ? JSON.parse(row.quality_settings) : null
+    return projects.map(p => ({
+      id: p._id.toString(),
+      model_id: p.model_id.toString(),
+      project_id: p.project_id ? p.project_id.toString() : null,
+      user_id: p.user_id.toString(),
+      reconstruction_method: p.reconstruction_method,
+      quality_settings: p.quality_settings,
+      input_images_count: p.input_images_count,
+      processing_status: p.processing_status,
+      output_mesh_path: p.output_mesh_path,
+      processing_log: p.processing_log,
+      created_at: p.created_at,
+      updated_at: p.updated_at
     }))
   },
 
   /**
    * Update photogrammetry project status
-   * @param {number} projectId - Project ID
-   * @param {number} userId - User ID (for authorization)
+   * @param {string} projectId - Project ID (ObjectId string)
+   * @param {string} userId - User ID (ObjectId string)
    * @param {Object} updateData - Update data
    * @returns {Promise<Object|null>} Updated project or null
    */
@@ -120,24 +188,46 @@ export const photogrammetryService = {
       processing_log
     } = updateData
     
-    const result = await pool.query(
-      `UPDATE photogrammetry_projects 
-       SET processing_status = COALESCE($1, processing_status),
-           output_mesh_path = COALESCE($2, output_mesh_path),
-           processing_log = COALESCE($3, processing_log),
-           updated_at = NOW()
-       WHERE id = $4 AND user_id = $5
-       RETURNING *`,
-      [processing_status, output_mesh_path, processing_log, projectId, userId]
+    const db = await getDB()
+    const updateFields = {
+      updated_at: new Date()
+    }
+    
+    if (processing_status !== undefined) updateFields.processing_status = processing_status
+    if (output_mesh_path !== undefined) updateFields.output_mesh_path = output_mesh_path
+    if (processing_log !== undefined) updateFields.processing_log = processing_log
+    
+    const result = await db.collection('photogrammetry_projects').findOneAndUpdate(
+      {
+        _id: new ObjectId(projectId),
+        user_id: new ObjectId(userId)
+      },
+      { $set: updateFields },
+      { returnDocument: 'after' }
     )
     
-    return result.rows[0] || null
+    if (!result.value) return null
+    
+    return {
+      id: result.value._id.toString(),
+      model_id: result.value.model_id.toString(),
+      project_id: result.value.project_id ? result.value.project_id.toString() : null,
+      user_id: result.value.user_id.toString(),
+      reconstruction_method: result.value.reconstruction_method,
+      quality_settings: result.value.quality_settings,
+      input_images_count: result.value.input_images_count,
+      processing_status: result.value.processing_status,
+      output_mesh_path: result.value.output_mesh_path,
+      processing_log: result.value.processing_log,
+      created_at: result.value.created_at,
+      updated_at: result.value.updated_at
+    }
   },
 
   /**
    * Update camera calibration parameters
-   * @param {number} cameraId - Camera viewpoint ID
-   * @param {number} userId - User ID (for authorization)
+   * @param {string} cameraId - Camera viewpoint ID (ObjectId string)
+   * @param {string} userId - User ID (ObjectId string)
    * @param {Object} calibrationData - Calibration data
    * @returns {Promise<Object|null>} Updated camera or null
    */
@@ -152,41 +242,64 @@ export const photogrammetryService = {
       image_height
     } = calibrationData
     
-    // Verify camera ownership through model
-    const cameraCheck = await pool.query(
-      `SELECT cv.id FROM camera_viewpoints cv
-       JOIN models m ON cv.model_id = m.id
-       WHERE cv.id = $1 AND m.user_id = $2`,
-      [cameraId, userId]
-    )
+    const db = await getDB()
     
-    if (cameraCheck.rows.length === 0) {
+    // Verify camera ownership through model
+    const camera = await db.collection('camera_viewpoints')
+      .aggregate([
+        {
+          $match: { _id: new ObjectId(cameraId) }
+        },
+        {
+          $lookup: {
+            from: 'models',
+            localField: 'model_id',
+            foreignField: '_id',
+            as: 'model'
+          }
+        },
+        {
+          $unwind: '$model'
+        },
+        {
+          $match: {
+            'model.user_id': new ObjectId(userId)
+          }
+        }
+      ])
+      .toArray()
+    
+    if (camera.length === 0) {
       return null
     }
     
-    const result = await pool.query(
-      `UPDATE camera_viewpoints 
-       SET calibration_matrix = COALESCE($1, calibration_matrix),
-           distortion_coefficients = COALESCE($2, distortion_coefficients),
-           focal_length = COALESCE($3, focal_length),
-           sensor_width = COALESCE($4, sensor_width),
-           sensor_height = COALESCE($5, sensor_height),
-           image_width = COALESCE($6, image_width),
-           image_height = COALESCE($7, image_height)
-       WHERE id = $8
-       RETURNING *`,
-      [
-        calibration_matrix ? JSON.stringify(calibration_matrix) : null,
-        distortion_coefficients ? JSON.stringify(distortion_coefficients) : null,
-        focal_length || null,
-        sensor_width || null,
-        sensor_height || null,
-        image_width || null,
-        image_height || null,
-        cameraId
-      ]
+    const updateFields = {}
+    if (calibration_matrix !== undefined) updateFields.calibration_matrix = calibration_matrix
+    if (distortion_coefficients !== undefined) updateFields.distortion_coefficients = distortion_coefficients
+    if (focal_length !== undefined) updateFields.focal_length = focal_length
+    if (sensor_width !== undefined) updateFields.sensor_width = sensor_width
+    if (sensor_height !== undefined) updateFields.sensor_height = sensor_height
+    if (image_width !== undefined) updateFields.image_width = image_width
+    if (image_height !== undefined) updateFields.image_height = image_height
+    
+    const result = await db.collection('camera_viewpoints').findOneAndUpdate(
+      { _id: new ObjectId(cameraId) },
+      { $set: updateFields },
+      { returnDocument: 'after' }
     )
     
-    return result.rows[0] || null
+    if (!result.value) return null
+    
+    return {
+      id: result.value._id.toString(),
+      model_id: result.value.model_id.toString(),
+      calibration_matrix: result.value.calibration_matrix,
+      distortion_coefficients: result.value.distortion_coefficients,
+      focal_length: result.value.focal_length,
+      sensor_width: result.value.sensor_width,
+      sensor_height: result.value.sensor_height,
+      image_width: result.value.image_width,
+      image_height: result.value.image_height
+    }
   }
 }

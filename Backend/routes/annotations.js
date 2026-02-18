@@ -4,7 +4,8 @@ import { authenticate } from '../middleware/auth.js'
 import { annotationService } from '../services/annotationService.js'
 import { modelService } from '../services/modelService.js'
 import { asyncHandler, createError } from '../utils/errorHandler.js'
-import pool from '../config/database.js' // Still needed for model verification
+import { getDB } from '../config/database.js'
+import { ObjectId } from 'mongodb'
 
 const router = express.Router()
 
@@ -39,7 +40,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
 router.post(
   '/',
   [
-    body('model_id').isInt().withMessage('Model ID is required'),
+    body('model_id').notEmpty().withMessage('Model ID is required'),
     body('position_x').isFloat().withMessage('Position X is required'),
     body('position_y').isFloat().withMessage('Position Y is required'),
     body('position_z').isFloat().withMessage('Position Z is required'),
@@ -182,46 +183,67 @@ router.post(
       display_order,
     } = req.body
 
-    const result = await pool.query(
-      `INSERT INTO annotation_images (
-        annotation_id, image_path, image_name, thumbnail_path,
-        image_identifier, camera_position_x, camera_position_y, camera_position_z,
-        display_order, uploaded_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-      RETURNING *`,
-      [
-        req.params.id,
-        image_path,
-        image_name || null,
-        thumbnail_path || null,
-        image_identifier || null,
-        camera_position_x || null,
-        camera_position_y || null,
-        camera_position_z || null,
-        display_order || 0,
-        req.user.id,
-      ]
-    )
+    const db = await getDB()
+    const image = {
+      annotation_id: new ObjectId(req.params.id),
+      image_path,
+      image_name: image_name || null,
+      thumbnail_path: thumbnail_path || null,
+      image_identifier: image_identifier || null,
+      camera_position_x: camera_position_x || null,
+      camera_position_y: camera_position_y || null,
+      camera_position_z: camera_position_z || null,
+      display_order: display_order || 0,
+      uploaded_by: new ObjectId(req.user.id),
+      created_at: new Date()
+    }
 
-    res.status(201).json(result.rows[0])
+    const result = await db.collection('annotation_images').insertOne(image)
+
+    res.status(201).json({
+      id: result.insertedId.toString(),
+      ...image,
+      annotation_id: image.annotation_id.toString(),
+      uploaded_by: image.uploaded_by.toString()
+    })
   })
 )
 
 // Delete image from annotation
 router.delete('/images/:imageId', asyncHandler(async (req, res) => {
   // Verify image belongs to user's annotation
-  const imageCheck = await pool.query(
-    `SELECT ai.id FROM annotation_images ai
-     JOIN annotations a ON ai.annotation_id = a.id
-     WHERE ai.id = $1 AND a.user_id = $2`,
-    [req.params.imageId, req.user.id]
-  )
+  const db = await getDB()
+  const imageCheck = await db.collection('annotation_images')
+    .aggregate([
+      {
+        $match: { _id: new ObjectId(req.params.imageId) }
+      },
+      {
+        $lookup: {
+          from: 'annotations',
+          localField: 'annotation_id',
+          foreignField: '_id',
+          as: 'annotation'
+        }
+      },
+      {
+        $unwind: '$annotation'
+      },
+      {
+        $match: {
+          'annotation.user_id': new ObjectId(req.user.id)
+        }
+      }
+    ])
+    .toArray()
 
-  if (imageCheck.rows.length === 0) {
+  if (imageCheck.length === 0) {
     throw createError('Image not found', 404)
   }
 
-  await pool.query('DELETE FROM annotation_images WHERE id = $1', [req.params.imageId])
+  await db.collection('annotation_images').deleteOne({
+    _id: new ObjectId(req.params.imageId)
+  })
 
   res.json({ message: 'Image deleted successfully' })
 }))

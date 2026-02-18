@@ -1,61 +1,55 @@
-import pool from './config/database.js'
+import { connectDB, getDB } from './config/database.js'
 
 async function testConnection() {
   try {
-    console.log('Testing database connection...')
+    console.log('Testing MongoDB connection...')
     console.log('Config:', {
-      host: process.env.DB_HOST || 'localhost',
-      port: process.env.DB_PORT || 5432,
-      database: process.env.DB_NAME || 'nira_db',
-      user: process.env.DB_USER || 'postgres',
+      uri: process.env.MONGODB_URI ? process.env.MONGODB_URI.split('@')[1] || 'Connected' : 'Not set',
+      database: process.env.DB_NAME || 'web3drender_db',
     })
 
-    const client = await pool.connect()
-    console.log('✅ Successfully connected to database!')
+    const db = await connectDB()
+    console.log('✅ Successfully connected to MongoDB!')
 
-    // Test if tables exist
-    const tablesResult = await client.query(`
-      SELECT table_name 
-      FROM information_schema.tables 
-      WHERE table_schema = 'public' 
-      AND table_type = 'BASE TABLE'
-      ORDER BY table_name;
-    `)
+    // Test if collections exist
+    const collections = await db.listCollections().toArray()
 
-    console.log('\n📊 Existing tables:')
-    if (tablesResult.rows.length === 0) {
-      console.log('⚠️  No tables found! Run database.sql to create tables.')
+    console.log('\n📊 Existing collections:')
+    if (collections.length === 0) {
+      console.log('⚠️  No collections found! Collections will be created automatically on first use.')
     } else {
-      tablesResult.rows.forEach(row => {
-        console.log(`  - ${row.table_name}`)
+      collections.forEach(col => {
+        console.log(`  - ${col.name}`)
       })
     }
 
-    // Check if users table exists and has correct structure
-    if (tablesResult.rows.some(row => row.table_name === 'users')) {
-      const usersCheck = await client.query(`
-        SELECT column_name, data_type 
-        FROM information_schema.columns 
-        WHERE table_name = 'users'
-        ORDER BY ordinal_position;
-      `)
-      console.log('\n👤 Users table structure:')
-      usersCheck.rows.forEach(col => {
-        console.log(`  - ${col.column_name}: ${col.data_type}`)
-      })
+    // Check if users collection exists and get count
+    if (collections.some(col => col.name === 'users')) {
+      const userCount = await db.collection('users').countDocuments()
+      console.log(`\n👤 Users collection: ${userCount} document(s)`)
+      
+      // Get sample user structure if exists
+      const sampleUser = await db.collection('users').findOne({}, { projection: { password: 0 } })
+      if (sampleUser) {
+        console.log('\n📋 Sample user structure:')
+        Object.keys(sampleUser).forEach(key => {
+          const value = sampleUser[key]
+          const type = value instanceof Date ? 'Date' : Array.isArray(value) ? 'Array' : typeof value
+          console.log(`  - ${key}: ${type}`)
+        })
+      }
     }
 
-    client.release()
     console.log('\n✅ Database connection test completed!')
     process.exit(0)
   } catch (error) {
     console.error('\n❌ Database connection failed!')
     console.error('Error:', error.message)
     console.error('\nTroubleshooting:')
-    console.error('1. Is PostgreSQL running?')
-    console.error('2. Does the database exist? Run: CREATE DATABASE nira_db;')
-    console.error('3. Check your .env file credentials')
-    console.error('4. Verify database name, user, and password')
+    console.error('1. Is MongoDB accessible?')
+    console.error('2. Check your MONGODB_URI in .env file')
+    console.error('3. Verify network connectivity to MongoDB')
+    console.error('4. Check if MongoDB credentials are correct')
     process.exit(1)
   }
 }

@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import rateLimit from 'express-rate-limit'
 import { body, validationResult } from 'express-validator'
-import pool from '../config/database.js'
+import { getDB } from '../config/database.js'
 import { asyncHandler, createError } from '../utils/errorHandler.js'
 import { validatePasswordStrength } from '../utils/passwordValidator.js'
 
@@ -54,25 +54,36 @@ router.post(
       })
     }
 
-    // Check if user exists
-    const userCheck = await pool.query('SELECT id FROM users WHERE email = $1', [email])
-    if (userCheck.rows.length > 0) {
-      throw createError('User already exists', 400)
+    const db = await getDB()
+
+    // Check if user exists (normalize email to lowercase)
+    const normalizedEmail = email.toLowerCase().trim()
+    const existingUser = await db.collection('users').findOne({ email: normalizedEmail })
+    if (existingUser) {
+      throw createError('User with this email already exists', 400)
     }
 
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10)
 
-    // Create user
-    const result = await pool.query(
-      'INSERT INTO users (name, email, password) VALUES ($1, $2, $3) RETURNING id, name, email, created_at',
-      [name, email, hashedPassword]
-    )
+    // Create user (normalize email to lowercase)
+    const now = new Date()
+    const user = {
+      name: name.trim(),
+      email: normalizedEmail,
+      password: hashedPassword,
+      created_at: now,
+      updated_at: now
+    }
 
-    const user = result.rows[0]
+    const result = await db.collection('users').insertOne(user)
 
     // Generate token
-    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, {
+    if (!process.env.JWT_SECRET) {
+      throw createError('JWT_SECRET is not configured', 500)
+    }
+    
+    const token = jwt.sign({ userId: result.insertedId.toString() }, process.env.JWT_SECRET, {
       expiresIn: process.env.JWT_EXPIRE || '7d',
     })
 
@@ -80,7 +91,7 @@ router.post(
       message: 'User created successfully',
       token,
       user: {
-        id: user.id,
+        id: result.insertedId.toString(),
         name: user.name,
         email: user.email,
       },
@@ -107,22 +118,30 @@ router.post(
 
     const { email, password } = req.body
 
+    const db = await getDB()
+
     // Find user
-    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email])
-    if (result.rows.length === 0) {
-      throw createError('Invalid credentials', 401)
+    const user = await db.collection('users').findOne({ email: email.toLowerCase().trim() })
+    if (!user) {
+      throw createError('Invalid email or password', 401)
     }
 
-    const user = result.rows[0]
-
     // Check password
+    if (!user.password) {
+      throw createError('User account error - please contact support', 500)
+    }
+    
     const isMatch = await bcrypt.compare(password, user.password)
     if (!isMatch) {
-      throw createError('Invalid credentials', 401)
+      throw createError('Invalid email or password', 401)
     }
 
     // Generate token
-    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, {
+    if (!process.env.JWT_SECRET) {
+      throw createError('JWT_SECRET is not configured', 500)
+    }
+    
+    const token = jwt.sign({ userId: user._id.toString() }, process.env.JWT_SECRET, {
       expiresIn: process.env.JWT_EXPIRE || '7d',
     })
 
@@ -130,7 +149,7 @@ router.post(
       message: 'Login successful',
       token,
       user: {
-        id: user.id,
+        id: user._id.toString(),
         name: user.name,
         email: user.email,
       },

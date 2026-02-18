@@ -1,5 +1,6 @@
-import pool from '../config/database.js'
-import { getCache, setCache, clearCache } from '../utils/queryCache.js'
+import { getDB } from '../config/database.js'
+import { ObjectId } from 'mongodb'
+import { clearCache } from '../utils/queryCache.js'
 
 /**
  * Georeferencing Service - Handles coordinate transformations and georeferencing
@@ -8,70 +9,103 @@ import { getCache, setCache, clearCache } from '../utils/queryCache.js'
 export const georeferencingService = {
   /**
    * Get model georeferencing data
-   * @param {number} modelId - Model ID
+   * @param {string} modelId - Model ID (ObjectId string)
    * @returns {Promise<Object|null>} Georeferencing data or null
    */
   async getModelGeoreferencing(modelId) {
-    const result = await pool.query(
-      `SELECT crs, origin_lat, origin_lon, origin_altitude, transform_matrix 
-       FROM models 
-       WHERE id = $1`,
-      [modelId]
+    const db = await getDB()
+    const model = await db.collection('models').findOne(
+      { _id: new ObjectId(modelId) },
+      {
+        projection: {
+          crs: 1,
+          origin_lat: 1,
+          origin_lon: 1,
+          origin_altitude: 1,
+          transform_matrix: 1
+        }
+      }
     )
     
-    if (result.rows.length === 0) {
+    if (!model) {
       return null
     }
     
-    const row = result.rows[0]
     return {
-      crs: row.crs,
-      origin_lat: row.origin_lat ? parseFloat(row.origin_lat) : null,
-      origin_lon: row.origin_lon ? parseFloat(row.origin_lon) : null,
-      origin_altitude: row.origin_altitude ? parseFloat(row.origin_altitude) : null,
-      transform_matrix: row.transform_matrix || null
+      crs: model.crs,
+      origin_lat: model.origin_lat ? parseFloat(model.origin_lat) : null,
+      origin_lon: model.origin_lon ? parseFloat(model.origin_lon) : null,
+      origin_altitude: model.origin_altitude ? parseFloat(model.origin_altitude) : null,
+      transform_matrix: model.transform_matrix || null
     }
   },
 
   /**
    * Update model georeferencing
-   * @param {number} modelId - Model ID
-   * @param {number} userId - User ID (for authorization)
+   * @param {string} modelId - Model ID (ObjectId string)
+   * @param {string} userId - User ID (ObjectId string)
    * @param {Object} georefData - Georeferencing data
    * @returns {Promise<Object|null>} Updated georeferencing or null
    */
   async updateGeoreferencing(modelId, userId, georefData) {
     const { crs, origin_lat, origin_lon, origin_altitude, transform_matrix } = georefData
     
-    // Verify model ownership
-    const ownershipCheck = await pool.query(
-      'SELECT id FROM models WHERE id = $1 AND user_id = $2',
-      [modelId, userId]
-    )
+    const db = await getDB()
     
-    if (ownershipCheck.rows.length === 0) {
+    // Verify model ownership
+    const ownershipCheck = await db.collection('models').findOne({
+      _id: new ObjectId(modelId),
+      user_id: new ObjectId(userId)
+    })
+    
+    if (!ownershipCheck) {
       return null
     }
     
-    const result = await pool.query(
-      `UPDATE models 
-       SET crs = $1, origin_lat = $2, origin_lon = $3, origin_altitude = $4, 
-           transform_matrix = $5, updated_at = NOW()
-       WHERE id = $6 AND user_id = $7
-       RETURNING crs, origin_lat, origin_lon, origin_altitude, transform_matrix`,
-      [crs || null, origin_lat || null, origin_lon || null, origin_altitude || null,
-       transform_matrix ? JSON.stringify(transform_matrix) : null, modelId, userId]
+    const result = await db.collection('models').findOneAndUpdate(
+      {
+        _id: new ObjectId(modelId),
+        user_id: new ObjectId(userId)
+      },
+      {
+        $set: {
+          crs: crs || null,
+          origin_lat: origin_lat || null,
+          origin_lon: origin_lon || null,
+          origin_altitude: origin_altitude || null,
+          transform_matrix: transform_matrix || null,
+          updated_at: new Date()
+        }
+      },
+      {
+        returnDocument: 'after',
+        projection: {
+          crs: 1,
+          origin_lat: 1,
+          origin_lon: 1,
+          origin_altitude: 1,
+          transform_matrix: 1
+        }
+      }
     )
     
     // Clear cache
     clearCache(`models:*`)
     
-    return result.rows[0] || null
+    if (!result.value) return null
+    
+    return {
+      crs: result.value.crs,
+      origin_lat: result.value.origin_lat,
+      origin_lon: result.value.origin_lon,
+      origin_altitude: result.value.origin_altitude,
+      transform_matrix: result.value.transform_matrix
+    }
   },
 
   /**
    * Convert 3D local coordinates to geographic coordinates (lat/lon/alt)
-   * @param {number} modelId - Model ID
+   * @param {string} modelId - Model ID (ObjectId string)
    * @param {number} x - Local X coordinate
    * @param {number} y - Local Y coordinate
    * @param {number} z - Local Z coordinate
@@ -101,7 +135,7 @@ export const georeferencingService = {
 
   /**
    * Convert geographic coordinates (lat/lon/alt) to 3D local coordinates
-   * @param {number} modelId - Model ID
+   * @param {string} modelId - Model ID (ObjectId string)
    * @param {number} lat - Latitude
    * @param {number} lon - Longitude
    * @param {number} altitude - Altitude
@@ -130,7 +164,7 @@ export const georeferencingService = {
 
   /**
    * Auto-convert annotation coordinates if model is georeferenced
-   * @param {number} modelId - Model ID
+   * @param {string} modelId - Model ID (ObjectId string)
    * @param {number} x - Local X coordinate
    * @param {number} y - Local Y coordinate
    * @param {number} z - Local Z coordinate
