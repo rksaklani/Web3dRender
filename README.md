@@ -5,7 +5,7 @@ A full-stack web application for collaborative 3D model visualization, Web3DRend
 ## Project Structure
 
 ```
-3dView/
+Web3DRender/
 ├── Frontend/          # React.js frontend
 │   ├── src/
 │   │   ├── components/    # React components
@@ -35,7 +35,7 @@ A full-stack web application for collaborative 3D model visualization, Web3DRend
 ### Backend
 - Node.js
 - Express.js
-- PostgreSQL
+- MongoDB
 - JWT Authentication
 - Multer (File uploads)
 
@@ -43,7 +43,7 @@ A full-stack web application for collaborative 3D model visualization, Web3DRend
 
 ### Prerequisites
 - Node.js (v18 or higher)
-- PostgreSQL (v12 or higher)
+- MongoDB (Atlas or local instance)
 - npm or yarn
 
 ### Backend Setup
@@ -63,31 +63,21 @@ npm install
 cp env.template .env
 ```
 
-4. Update `.env` with your PostgreSQL credentials:
-```
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=Web3DRender_db
-DB_USER=postgres
-DB_PASSWORD=your_password
+4. Update `.env` with your MongoDB credentials:
+```env
+MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/
+DB_NAME=web3drender_db
 JWT_SECRET=your_super_secret_jwt_key
+JWT_EXPIRE=7d
+PORT=5000
 ```
 
-5. Create the PostgreSQL database:
-```sql
-CREATE DATABASE Web3DRender_db;
-```
-
-6. Run migrations:
+5. Run the setup script:
 ```bash
-# Run all migrations in Backend/migrations/
-psql -U postgres -d Web3DRender_db -f migrations/add_georeferencing.sql
-psql -U postgres -d Web3DRender_db -f migrations/add_annotation_georeferencing.sql
-psql -U postgres -d Web3DRender_db -f migrations/add_photogrammetry_tables.sql
-psql -U postgres -d Web3DRender_db -f migrations/add_volumetric_video_tables.sql
+npm run migrate
 ```
 
-7. Start the backend server:
+6. Start the backend server:
 ```bash
 npm run dev
 ```
@@ -107,7 +97,7 @@ npm install
 ```
 
 3. (Optional) Create a `.env` file:
-```
+```env
 VITE_API_URL=http://localhost:5000/api
 ```
 
@@ -116,7 +106,7 @@ VITE_API_URL=http://localhost:5000/api
 npm run dev
 ```
 
-The frontend will run on `http://localhost:3000`
+The frontend will run on `http://localhost:5173` (Vite default port)
 
 ## Features
 
@@ -125,7 +115,7 @@ The frontend will run on `http://localhost:3000`
 - ✅ 3D Model Upload & Visualization
 - ✅ 3D Annotations with Surface Normals
 - ✅ Dashboard with Statistics
-- ✅ Responsive UI matching Nira.app design
+- ✅ Responsive UI with modern design
 - ✅ Multiple pages: Home, About, Pricing, Contact
 - ✅ Georeferencing Support
 - ✅ Photogrammetry Support
@@ -179,11 +169,16 @@ The frontend will run on `http://localhost:3000`
 ### Backend
 - Development: `npm run dev` (uses nodemon)
 - Production: `npm start`
+- Test DB Connection: `npm run test-db`
 
 ### Frontend
 - Development: `npm run dev`
 - Build: `npm run build`
 - Preview: `npm run preview`
+
+## Database
+
+This project uses MongoDB. Collections are created automatically on first use. Indexes are set up automatically when the database connection is established.
 
 ## License
 
